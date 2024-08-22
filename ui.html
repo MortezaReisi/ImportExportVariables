@@ -1,17 +1,51 @@
-<h2>Rectangle Creator</h2>
-<p>Count: <input id="count" value="5"></p>
-<button id="create">Create</button>
-<button id="cancel">Cancel</button>
-<script>
+<!DOCTYPE html>
+<html>
+  <head>
+    <style>
+      body { font-family: Arial, sans-serif; padding: 10px; }
+      label { display: block; margin: 10px 0 5px; }
+      select, button { width: 100%; padding: 10px; margin: 5px 0; }
+      button { background-color: #007bff; color: white; border: none; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <label for="collection">Select Collection:</label>
+    <select id="collection">
+      <!-- Options will be dynamically added by the plugin -->
+    </select>
+    <button id="export">Export Variables</button>
 
-document.getElementById('create').onclick = () => {
-  const textbox = document.getElementById('count');
-  const count = parseInt(textbox.value, 10);
-  parent.postMessage({ pluginMessage: { type: 'create-rectangles', count } }, '*')
-}
+    <script>
+      // Send a message to the plugin to fetch variable collections
+      parent.postMessage({ pluginMessage: { type: 'fetchCollections' } }, '*');
 
-document.getElementById('cancel').onclick = () => {
-  parent.postMessage({ pluginMessage: { type: 'cancel' } }, '*')
-}
+      // Handle button click
+      document.getElementById('export').onclick = () => {
+        const collection = document.getElementById('collection').value;
+        parent.postMessage({ pluginMessage: { type: 'export', collection } }, '*');
+      };
 
-</script>
+      // Handle messages from the plugin
+      window.onmessage = (event) => {
+        const { type, collections, json } = event.data.pluginMessage;
+        if (type === 'collections') {
+          const select = document.getElementById('collection');
+          collections.forEach(collection => {
+            const option = document.createElement('option');
+            option.value = collection.id;
+            option.textContent = collection.name;
+            select.appendChild(option);
+          });
+        } else if (type === 'file') {
+          const blob = new Blob([json], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = 'variables.json'; // Default filename
+          a.click();
+          URL.revokeObjectURL(url);
+        }
+      };
+    </script>
+  </body>
+</html>

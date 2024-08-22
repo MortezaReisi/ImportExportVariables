@@ -2,17 +2,13 @@
   "name": "ImportExportVariables",
   "id": "1408557335577065614",
   "api": "1.0.0",
+  "editorType": ["figma"],
+  "permissions": [],
   "main": "code.js",
-  "capabilities": [],
-  "enableProposedApi": false,
-  "documentAccess": "dynamic-page",
-  "editorType": [
-    "figma"
+  "menu": [
+    { "command": "import", "name": "Import Variables" },
+    { "command": "export", "name": "Export Variables" }
   ],
-  "ui": "ui.html",
-  "networkAccess": {
-    "allowedDomains": [
-      "none"
-    ]
-  }
+  "ui": { "import": "import.html", "export": "export.html" },
+  "documentAccess": "dynamic-page"
 }
