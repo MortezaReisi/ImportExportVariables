@@ -69,7 +69,6 @@ function traverseToken({
   aliases,
 }) {
   type = type || object.$type;
-  // if key is a meta field, move on
   if (key.charAt(0) === "$") {
     return;
   }
@@ -138,23 +137,36 @@ async function processCollection({ name, modes, variableIds }) {
   for (const mode of modes) {
     const file = { fileName: `${name}.${mode.name}.tokens.json`, body: {} };
     for (const variableId of variableIds) {
-      const { name, resolvedType, valuesByMode } =
+      const { name, resolvedType, valuesByMode, description, id } =
         await figma.variables.getVariableByIdAsync(variableId);
       const value = valuesByMode[mode.modeId];
-      if (value !== undefined && ["COLOR", "FLOAT"].includes(resolvedType)) {
+
+      if (value !== undefined && ["COLOR", "FLOAT", "STRING"].includes(resolvedType)) {
         let obj = file.body;
         name.split("/").forEach((groupName) => {
           obj[groupName] = obj[groupName] || {};
           obj = obj[groupName];
         });
-        obj.$type = resolvedType === "COLOR" ? "color" : "number";
-        if (value.type === "VARIABLE_ALIAS") {
-          const currentVar = await figma.variables.getVariableByIdAsync(
-            value.id
-          );
-          obj.$value = `{${currentVar.name.replace(/\//g, ".")}}`;
-        } else {
-          obj.$value = resolvedType === "COLOR" ? rgbToHex(value) : value;
+
+        obj.$id = id; // Add unique ID
+        obj.$description = description || ""; // Add description or empty string if not available
+
+        if (resolvedType === "COLOR") {
+          obj.$type = "color";
+          if (value.type === "VARIABLE_ALIAS") {
+            const currentVar = await figma.variables.getVariableByIdAsync(
+              value.id
+            );
+            obj.$value = `{${currentVar.name.replace(/\//g, ".")}}`;
+          } else {
+            obj.$value = rgbToHex(value);
+          }
+        } else if (resolvedType === "FLOAT") {
+          obj.$type = "number";
+          obj.$value = value;
+        } else if (resolvedType === "STRING") {
+          obj.$type = "string";
+          obj.$value = value;
         }
       }
     }
