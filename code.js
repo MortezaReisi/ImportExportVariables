@@ -1,25 +1,38 @@
+// Clear the console for a fresh start
 console.clear();
 
+// Function to create a new variable collection
 function createCollection(name) {
   const collection = figma.variables.createVariableCollection(name);
   const modeId = collection.modes[0].modeId;
   return { collection, modeId };
 }
 
-function createToken(collection, modeId, type, name, value) {
+// Function to create a new token (variable)
+function createToken(collection, modeId, type, name, value, description = "") {
   const token = figma.variables.createVariable(name, collection, type);
   token.setValueForMode(modeId, value);
+  token.description = description;
   return token;
 }
 
-function createVariable(collection, modeId, key, valueKey, tokens) {
+// Function to create an alias variable
+function createVariable(collection, modeId, key, valueKey, tokens, description = "") {
   const token = tokens[valueKey];
-  return createToken(collection, modeId, token.resolvedType, key, {
-    type: "VARIABLE_ALIAS",
-    id: `${token.id}`,
-  });
+  return createToken(
+    collection,
+    modeId,
+    token.resolvedType,
+    key,
+    {
+      type: "VARIABLE_ALIAS",
+      id: `${token.id}`,
+    },
+    description
+  );
 }
 
+// Function to import tokens from a JSON file
 function importJSONFile({ fileName, body }) {
   const json = JSON.parse(body);
   const { collection, modeId } = createCollection(fileName);
@@ -29,7 +42,6 @@ function importJSONFile({ fileName, body }) {
     traverseToken({
       collection,
       modeId,
-      type: json.$type,
       key,
       object,
       tokens,
@@ -39,90 +51,138 @@ function importJSONFile({ fileName, body }) {
   processAliases({ collection, modeId, aliases, tokens });
 }
 
+// Function to process and resolve aliases
 function processAliases({ collection, modeId, aliases, tokens }) {
   aliases = Object.values(aliases);
   let generations = aliases.length;
   while (aliases.length && generations > 0) {
-    for (let i = 0; i < aliases.length; i++) {
-      const { key, type, valueKey } = aliases[i];
+    for (let i = aliases.length - 1; i >= 0; i--) {
+      const { key, valueKey, description } = aliases[i];
       const token = tokens[valueKey];
       if (token) {
         aliases.splice(i, 1);
-        tokens[key] = createVariable(collection, modeId, key, valueKey, tokens);
+        tokens[key] = createVariable(
+          collection,
+          modeId,
+          key,
+          valueKey,
+          tokens,
+          description
+        );
       }
     }
     generations--;
   }
+
+  if (aliases.length > 0) {
+    console.warn("Some aliases could not be resolved due to missing tokens:", aliases);
+  }
 }
 
+// Function to check if a value is an alias
 function isAlias(value) {
   return value.toString().trim().charAt(0) === "{";
 }
 
+// Recursive function to traverse and process each token
 function traverseToken({
   collection,
   modeId,
-  type,
   key,
   object,
   tokens,
   aliases,
+  parentType,
 }) {
-  type = type || object.$type;
   if (key.charAt(0) === "$") {
     return;
   }
+
+  const type = object.$type || parentType;
+
   if (object.$value !== undefined) {
+    const description = object.$description || "";
+    if (!type) {
+      console.warn(`Type is missing for token: ${key}. Skipping this token.`);
+      return;
+    }
+
     if (isAlias(object.$value)) {
       const valueKey = object.$value
         .trim()
         .replace(/\./g, "/")
         .replace(/[\{\}]/g, "");
       if (tokens[valueKey]) {
-        tokens[key] = createVariable(collection, modeId, key, valueKey, tokens);
+        tokens[key] = createVariable(
+          collection,
+          modeId,
+          key,
+          valueKey,
+          tokens,
+          description
+        );
       } else {
         aliases[key] = {
           key,
-          type,
           valueKey,
+          description,
         };
       }
-    } else if (type === "color") {
-      tokens[key] = createToken(
-        collection,
-        modeId,
-        "COLOR",
-        key,
-        parseColor(object.$value)
-      );
-    } else if (type === "number") {
-      tokens[key] = createToken(
-        collection,
-        modeId,
-        "FLOAT",
-        key,
-        object.$value
-      );
     } else {
-      console.log("unsupported type", type, object);
+      switch (type) {
+        case "color":
+          tokens[key] = createToken(
+            collection,
+            modeId,
+            "COLOR",
+            key,
+            parseColor(object.$value),
+            description
+          );
+          break;
+        case "number":
+          tokens[key] = createToken(
+            collection,
+            modeId,
+            "FLOAT",
+            key,
+            parseFloat(object.$value),
+            description
+          );
+          break;
+        case "string":
+          tokens[key] = createToken(
+            collection,
+            modeId,
+            "STRING",
+            key,
+            object.$value,
+            description
+          );
+          break;
+        default:
+          console.warn(`Unsupported type "${type}" for token "${key}". Skipping this token.`);
+      }
     }
   } else {
+    const newParentType = object.$type || parentType;
     Object.entries(object).forEach(([key2, object2]) => {
       if (key2.charAt(0) !== "$") {
         traverseToken({
           collection,
           modeId,
-          type,
           key: `${key}/${key2}`,
           object: object2,
           tokens,
           aliases,
+          parentType: newParentType,
         });
       }
     });
   }
 }
 
+// Function to export tokens to JSON files
 async function exportToJSON() {
   const collections = await figma.variables.getLocalVariableCollectionsAsync();
   const files = [];
@@ -132,41 +192,53 @@ async function exportToJSON() {
   figma.ui.postMessage({ type: "EXPORT_RESULT", files });
 }
 
+// Function to process a single variable collection
 async function processCollection({ name, modes, variableIds }) {
   const files = [];
   for (const mode of modes) {
     const file = { fileName: `${name}.${mode.name}.tokens.json`, body: {} };
     for (const variableId of variableIds) {
-      const { name, resolvedType, valuesByMode, description, id } =
-        await figma.variables.getVariableByIdAsync(variableId);
+      const variable = await figma.variables.getVariableByIdAsync(variableId);
+      const { name: varName, resolvedType, valuesByMode, description } = variable;
       const value = valuesByMode[mode.modeId];
 
-      if (value !== undefined && ["COLOR", "FLOAT", "STRING"].includes(resolvedType)) {
+      if (value !== undefined) {
         let obj = file.body;
-        name.split("/").forEach((groupName) => {
-          obj[groupName] = obj[groupName] || {};
-          obj = obj[groupName];
-        });
-
-        obj.$id = id; // Add unique ID
-        obj.$description = description || ""; // Add description or empty string if not available
-
-        if (resolvedType === "COLOR") {
-          obj.$type = "color";
-          if (value.type === "VARIABLE_ALIAS") {
-            const currentVar = await figma.variables.getVariableByIdAsync(
-              value.id
-            );
-            obj.$value = `{${currentVar.name.replace(/\//g, ".")}}`;
-          } else {
-            obj.$value = rgbToHex(value);
+        const path = varName.split("/");
+        const key = path.pop();
+        for (const groupName of path) {
+          if (groupName.charAt(0) === "$") continue;
+          if (!obj[groupName]) {
+            obj[groupName] = {};
           }
-        } else if (resolvedType === "FLOAT") {
-          obj.$type = "number";
-          obj.$value = value;
-        } else if (resolvedType === "STRING") {
-          obj.$type = "string";
-          obj.$value = value;
+          obj = obj[groupName];
+        }
+
+        if (!obj[key]) {
+          obj[key] = {};
+        }
+
+        obj = obj[key];
+        obj.$type = resolvedType === "FLOAT" ? "number" : resolvedType.toLowerCase();
+        obj.$description = description || "";
+
+        if (value.type === "VARIABLE_ALIAS") {
+          const aliasVar = await figma.variables.getVariableByIdAsync(value.id);
+          obj.$value = `{${aliasVar.name.replace(/\//g, ".")}}`;
+        } else {
+          switch (resolvedType) {
+            case "COLOR":
+              obj.$value = rgbToHex(value);
+              break;
+            case "FLOAT":
+              obj.$value = value;
+              break;
+            case "STRING":
+              obj.$value = value;
+              break;
+            default:
+              console.warn(`Unsupported type "${resolvedType}" for variable "${varName}".`);
+          }
         }
       }
     }
@@ -175,8 +247,9 @@ async function processCollection({ name, modes, variableIds }) {
   return files;
 }
 
+// Handler for messages from the plugin UI
 figma.ui.onmessage = async (e) => {
-  console.log("code received message", e);
+  console.log("Code received message:", e);
   if (e.type === "IMPORT") {
     const { fileName, body } = e;
     importJSONFile({ fileName, body });
@@ -184,6 +257,8 @@ figma.ui.onmessage = async (e) => {
     await exportToJSON();
   }
 };
+
+// Show the appropriate UI based on the command
 if (figma.command === "import") {
   figma.showUI(__uiFiles__["import"], {
     width: 500,
@@ -198,8 +273,9 @@ if (figma.command === "import") {
   });
 }
 
+// Function to convert RGB color values to hex string
 function rgbToHex({ r, g, b, a }) {
-  if (a !== 1) {
+  if (a !== undefined && a !== 1) {
     return `rgba(${[r, g, b]
       .map((n) => Math.round(n * 255))
       .join(", ")}, ${a.toFixed(4)})`;
@@ -213,6 +289,7 @@ function rgbToHex({ r, g, b, a }) {
   return `#${hex}`;
 }
 
+// Function to parse various color formats into RGB object
 function parseColor(color) {
   color = color.trim();
   const rgbRegex = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/;
@@ -223,7 +300,7 @@ function parseColor(color) {
     /^hsla\(\s*(\d{1,3})\s*,\s*(\d{1,3})%\s*,\s*(\d{1,3})%\s*,\s*([\d.]+)\s*\)$/;
   const hexRegex = /^#([A-Fa-f0-9]{3}){1,2}$/;
   const floatRgbRegex =
-    /^\{\s*r:\s*[\d\.]+,\s*g:\s*[\d\.]+,\s*b:\s*[\d\.]+(,\s*opacity:\s*[\d\.]+)?\s*\}$/;
+    /^\{\s*r:\s*[\d\.]+,\s*g:\s*[\d\.]+,\s*b:\s*[\d\.]+(,\s*a:\s*[\d\.]+)?\s*\}$/;
 
   if (rgbRegex.test(color)) {
     const [, r, g, b] = color.match(rgbRegex);
@@ -262,11 +339,13 @@ function parseColor(color) {
   } else if (floatRgbRegex.test(color)) {
     return JSON.parse(color);
   } else {
-    throw new Error("Invalid color format");
+    throw new Error("Invalid color format: " + color);
   }
 }
 
+// Function to convert HSL values to RGB object
 function hslToRgbFloat(h, s, l) {
+  h = h / 360; // Convert degrees to fraction
   const hue2rgb = (p, q, t) => {
     if (t < 0) t += 1;
     if (t > 1) t -= 1;
@@ -276,15 +355,17 @@ function hslToRgbFloat(h, s, l) {
     return p;
   };
 
-  if (s === 0) {
-    return { r: l, g: l, b: l };
-  }
+  let r, g, b;
 
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-  const p = 2 * l - q;
-  const r = hue2rgb(p, q, (h + 1 / 3) % 1);
-  const g = hue2rgb(p, q, h % 1);
-  const b = hue2rgb(p, q, (h - 1 / 3) % 1);
+  if (s === 0) {
+    r = g = b = l; // Achromatic
+  } else {
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1 / 3);
+    g = hue2rgb(p, q, h);
+    b = hue2rgb(p, q, h - 1 / 3);
+  }
 
   return { r, g, b };
 }
