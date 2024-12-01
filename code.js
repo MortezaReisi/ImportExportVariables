@@ -1,6 +1,10 @@
 // Clear the console for a fresh start
 console.clear();
 
+// Global variables to hold new and updated variables
+let newVariablesList = [];
+let updatedVariablesList = [];
+
 // Function to create a new variable collection
 function createCollection(name) {
   const collection = figma.variables.createVariableCollection(name);
@@ -248,13 +252,23 @@ async function processCollection({ name, modes, variableIds }) {
 }
 
 // Handler for messages from the plugin UI
-figma.ui.onmessage = async (e) => {
-  console.log("Code received message:", e);
-  if (e.type === "IMPORT") {
-    const { fileName, body } = e;
+figma.ui.onmessage = async (msg) => {
+  console.log("Code received message:", msg);
+  if (msg.type === "IMPORT") {
+    const { fileName, body } = msg;
     importJSONFile({ fileName, body });
-  } else if (e.type === "EXPORT") {
+  } else if (msg.type === "EXPORT") {
     await exportToJSON();
+  } else if (msg.type === "LOAD_UPDATE_DATA") {
+    const jsonData = msg.data;
+    await processUpdateData(jsonData);
+  } else if (msg.type === "UPDATE_VARIABLE") {
+    const { name } = msg;
+    await updateVariableByName(name);
+  } else if (msg.type === "UPDATE_ALL") {
+    await updateAllVariables();
+  } else if (msg.type === "ADD_ALL_NEW") {
+    await addAllNewVariables();
   }
 };
 
@@ -269,6 +283,12 @@ if (figma.command === "import") {
   figma.showUI(__uiFiles__["export"], {
     width: 500,
     height: 500,
+    themeColors: true,
+  });
+} else if (figma.command === "update") {
+  figma.showUI(__uiFiles__["update"], {
+    width: 800,
+    height: 600,
     themeColors: true,
   });
 }
@@ -368,4 +388,180 @@ function hslToRgbFloat(h, s, l) {
   }
 
   return { r, g, b };
+}
+
+// Helper function to flatten JSON
+function flattenJSON(obj, prefix = "", result = {}) {
+  for (const [key, value] of Object.entries(obj)) {
+    if (key.startsWith("$")) continue; // Skip meta properties
+    const path = prefix ? `${prefix}/${key}` : key;
+    if (value.$value !== undefined) {
+      result[path] = {
+        $value: value.$value,
+        $type: value.$type,
+        $description: value.$description || "",
+      };
+    } else {
+      flattenJSON(value, path, result);
+    }
+  }
+  return result;
+}
+
+// Function to process update data
+async function processUpdateData(jsonData) {
+  const existingVariables = await figma.variables.getLocalVariablesAsync();
+  const existingVariableMap = {};
+  for (const variable of existingVariables) {
+    existingVariableMap[variable.name] = variable;
+  }
+
+  newVariablesList = [];
+  updatedVariablesList = [];
+  let unchangedCount = 0;
+
+  // Flatten the JSON data into a key-value map
+  const importedVariables = flattenJSON(jsonData);
+
+  for (const [name, importedData] of Object.entries(importedVariables)) {
+    if (existingVariableMap[name]) {
+      const existingVariable = existingVariableMap[name];
+      const currentValue = existingVariable.valuesByMode[existingVariable.collection.defaultModeId];
+
+      const importedValue = importedData.$value;
+      const importedType = importedData.$type;
+
+      const parsedImportedValue = parseImportedValue(importedValue, importedType);
+
+      if (!areValuesEqual(currentValue, parsedImportedValue, existingVariable.resolvedType)) {
+        updatedVariablesList.push({
+          name,
+          current: formatValue(currentValue, existingVariable.resolvedType),
+          updated: formatValue(parsedImportedValue, existingVariable.resolvedType),
+          variable: existingVariable,
+          newValue: parsedImportedValue,
+          type: existingVariable.resolvedType,
+        });
+      } else {
+        unchangedCount++;
+      }
+    } else {
+      newVariablesList.push({
+        name,
+        value: importedData.$value,
+        type: importedData.$type,
+        description: importedData.$description || "",
+      });
+    }
+  }
+
+  // Send data back to UI
+  figma.ui.postMessage({
+    type: "UPDATE_DATA_PROCESSED",
+    newVariables: newVariablesList,
+    updatedVariables: updatedVariablesList,
+    unchangedCount,
+  });
+}
+
+// Function to parse imported value based on type
+function parseImportedValue(value, type) {
+  if (isAlias(value)) {
+    // Handle aliases if needed
+    return value;
+  } else {
+    switch (type) {
+      case "color":
+        return parseColor(value);
+      case "number":
+        return parseFloat(value);
+      case "string":
+        return value;
+      default:
+        return value;
+    }
+  }
+}
+
+// Function to check if two values are equal
+function areValuesEqual(value1, value2, type) {
+  if (type === "COLOR") {
+    return (
+      value1.r === value2.r &&
+      value1.g === value2.g &&
+      value1.b === value2.b &&
+      value1.a === value2.a
+    );
+  } else {
+    return JSON.stringify(value1) === JSON.stringify(value2);
+  }
+}
+
+// Function to format value for display
+function formatValue(value, type) {
+  if (value && value.type === "VARIABLE_ALIAS") {
+    return `{Alias}`;
+  } else if (type === "COLOR") {
+    return rgbToHex(value);
+  } else {
+    return value.toString();
+  }
+}
+
+// Function to update a single variable by name
+async function updateVariableByName(name) {
+  const updatedVar = updatedVariablesList.find((v) => v.name === name);
+  if (updatedVar) {
+    const variable = updatedVar.variable;
+    const newValue = updatedVar.newValue;
+
+    variable.setValueForMode(variable.collection.defaultModeId, newValue);
+    figma.notify(`Variable "${name}" updated.`);
+  }
+}
+
+// Function to update all variables
+async function updateAllVariables() {
+  for (const updatedVar of updatedVariablesList) {
+    const variable = updatedVar.variable;
+    const newValue = updatedVar.newValue;
+
+    variable.setValueForMode(variable.collection.defaultModeId, newValue);
+  }
+  figma.notify("All variables updated successfully.");
+}
+
+// Function to add all new variables
+async function addAllNewVariables() {
+  const { collection, modeId } = getDefaultCollectionAndMode();
+
+  for (const newVar of newVariablesList) {
+    const type = newVar.type.toUpperCase();
+    const value = parseImportedValue(newVar.value, newVar.type);
+    createToken(
+      collection,
+      modeId,
+      type,
+      newVar.name,
+      value,
+      newVar.description || ""
+    );
+  }
+  figma.notify("All new variables added successfully.");
+}
+
+// Function to get default collection and mode
+function getDefaultCollectionAndMode() {
+  let collection;
+  let modeId;
+
+  const collections = figma.variables.getLocalVariableCollections();
+  if (collections.length > 0) {
+    collection = collections[0];
+    modeId = collection.modes[0].modeId;
+  } else {
+    ({ collection, modeId } = createCollection("Default Collection"));
+  }
+
+  return { collection, modeId };
 }
