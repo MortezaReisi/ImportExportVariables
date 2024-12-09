@@ -63,7 +63,8 @@
       margin-top: var(--spacing);
     }
 
-    th, td {
+    th,
+    td {
       padding: var(--spacing);
       border: 1px solid var(--figma-color-border);
       text-align: left;
@@ -82,6 +83,15 @@
       padding: var(--spacing) 0;
       border-bottom: 1px solid var(--figma-color-border);
     }
+
+    #statistics {
+      display: flex;
+      gap: var(--spacing);
+    }
+
+    #statistics span {
+      font-weight: bold;
+    }
   </style>
 </head>
 <body>
@@ -96,7 +106,7 @@
     </section>
 
     <!-- Statistics Section -->
-    <section>
+    <section id="statistics">
       <p>New Variables: <span id="new-count">0</span></p>
       <p>Updated Variables: <span id="updated-count">0</span></p>
       <p>Unchanged Variables: <span id="unchanged-count">0</span></p>
@@ -134,7 +144,10 @@
         const jsonInput = document.getElementById('json-input').value;
         try {
           const jsonData = JSON.parse(jsonInput);
-          parent.postMessage({ pluginMessage: { type: 'LOAD_UPDATE_DATA', data: jsonData } }, '*');
+          parent.postMessage(
+            { pluginMessage: { type: 'LOAD_UPDATE_DATA', data: jsonData } },
+            '*'
+          );
         } catch (error) {
           alert('Invalid JSON. Please check your input.');
         }
@@ -163,26 +176,31 @@
           // Populate Updated Variables Table
           const updatedVariablesTable = document.getElementById('updated-variables');
           updatedVariablesTable.innerHTML = '';
-          updatedVariables.forEach(({ name, current, updated }) => {
+          updatedVariables.forEach(({ name, current, updated, variable }) => {
             const row = document.createElement('tr');
             row.innerHTML = `
               <td>${name}</td>
               <td>${current}</td>
               <td>${updated}</td>
-              <td><button data-name="${name}">Update</button></td>
+              <td><button data-id="${variable.id}">Update</button></td>
             `;
             updatedVariablesTable.appendChild(row);
           });
 
           // Attach update button listeners
-          document.querySelectorAll('#updated-variables button').forEach((button) =>
+          document.querySelectorAll('#updated-variables button').forEach((button) => {
             button.addEventListener('click', () => {
-              parent.postMessage(
-                { pluginMessage: { type: 'UPDATE_VARIABLE', name: button.dataset.name } },
-                '*'
-              );
-            })
-          );
+              const id = button.dataset.id;
+              if (id) {
+                parent.postMessage(
+                  { pluginMessage: { type: 'UPDATE_VARIABLE', id } },
+                  '*'
+                );
+              } else {
+                console.error('No ID found for the update action.');
+              }
+            });
+          });
         }
       };
 

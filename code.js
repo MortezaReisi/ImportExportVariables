@@ -254,7 +254,8 @@ async function processCollection({ name, modes, variableIds }) {
 
 // Handler for messages from the plugin UI
 figma.ui.onmessage = async (msg) => {
-  console.log("Code received message:", msg);
+  console.log("Received message:", msg);
+
   if (msg.type === "IMPORT") {
     const { fileName, body } = msg;
     importJSONFile({ fileName, body });
@@ -262,10 +263,11 @@ figma.ui.onmessage = async (msg) => {
     await exportToJSON();
   } else if (msg.type === "LOAD_UPDATE_DATA") {
     const jsonData = msg.data;
-    await processUpdateData(jsonData);
+    const fileName = msg.fileName || "Unknown Collection";
+    await processUpdateData(jsonData, fileName);
   } else if (msg.type === "UPDATE_VARIABLE") {
-    const { name } = msg;
-    await updateVariableByName(name);
+    const { id } = msg;
+    await updateVariableById(id);
   } else if (msg.type === "UPDATE_ALL") {
     await updateAllVariables();
   } else if (msg.type === "ADD_ALL_NEW") {
@@ -294,7 +296,7 @@ if (figma.command === "import") {
   });
 }
 
-// Function to convert RGB color values to hex string
+// Convert RGB color values to hex string
 function rgbToHex({ r, g, b, a }) {
   if (a !== undefined && a !== 1) {
     return `rgba(${[r, g, b]
@@ -310,7 +312,7 @@ function rgbToHex({ r, g, b, a }) {
   return `#${hex}`;
 }
 
-// Function to parse various color formats into RGB object
+// Parse various color formats into RGB object
 function parseColor(color) {
   color = color.trim();
   const rgbRegex = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/;
@@ -364,7 +366,7 @@ function parseColor(color) {
   }
 }
 
-// Function to convert HSL values to RGB object
+// Convert HSL values to RGB object
 function hslToRgbFloat(h, s, l) {
   h = h / 360; // Convert degrees to fraction
   const hue2rgb = (p, q, t) => {
@@ -381,17 +383,17 @@ function hslToRgbFloat(h, s, l) {
   if (s === 0) {
     r = g = b = l; // Achromatic
   } else {
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l*s;
     const p = 2 * l - q;
-    r = hue2rgb(p, q, h + 1 / 3);
+    r = hue2rgb(p, q, h + 1/3);
     g = hue2rgb(p, q, h);
-    b = hue2rgb(p, q, h - 1 / 3);
+    b = hue2rgb(p, q, h - 1/3);
   }
 
   return { r, g, b };
 }
 
-// Helper function to flatten JSON
+// Flatten JSON to include $id
 function flattenJSON(obj, prefix = "", result = {}) {
   for (const [key, value] of Object.entries(obj)) {
     if (key.startsWith("$")) continue; // Skip meta properties
@@ -401,6 +403,7 @@ function flattenJSON(obj, prefix = "", result = {}) {
         $value: value.$value,
         $type: value.$type,
         $description: value.$description || "",
+        $id: value.$id
       };
     } else {
       flattenJSON(value, path, result);
@@ -409,54 +412,63 @@ function flattenJSON(obj, prefix = "", result = {}) {
   return result;
 }
 
-// Function to process update data
-async function processUpdateData(jsonData) {
-  const existingVariables = await figma.variables.getLocalVariablesAsync();
-  const existingVariableMap = {};
-  for (const variable of existingVariables) {
-    existingVariableMap[variable.name] = variable;
+// Process update data to identify new, updated, and unchanged variables
+async function processUpdateData(jsonData, fileName) {
+  const collections = await figma.variables.getLocalVariableCollectionsAsync();
+  const existingVariablesById = {};
+
+  // Map existing variables by their ID and store collectionId
+  for (const collection of collections) {
+    for (const variableId of collection.variableIds) {
+      const variable = await figma.variables.getVariableByIdAsync(variableId);
+      existingVariablesById[variable.id] = {
+        variable,
+        currentValue: variable.valuesByMode[collection.defaultModeId],
+        collectionId: collection.id
+      };
+    }
   }
 
   newVariablesList = [];
   updatedVariablesList = [];
   let unchangedCount = 0;
 
-  // Flatten the JSON data into a key-value map
+  // Flatten the imported JSON data
   const importedVariables = flattenJSON(jsonData);
 
   for (const [name, importedData] of Object.entries(importedVariables)) {
-    if (existingVariableMap[name]) {
-      const existingVariable = existingVariableMap[name];
-      const currentValue = existingVariable.valuesByMode[existingVariable.collection.defaultModeId];
+    const { $id, $value, $type } = importedData;
 
-      const importedValue = importedData.$value;
-      const importedType = importedData.$type;
+    if ($id && existingVariablesById[$id]) {
+      // Variable exists
+      const { variable, currentValue, collectionId } = existingVariablesById[$id];
+      const parsedNewValue = parseImportedValue($value, $type);
 
-      const parsedImportedValue = parseImportedValue(importedValue, importedType);
-
-      if (!areValuesEqual(currentValue, parsedImportedValue, existingVariable.resolvedType)) {
+      // Compare current and new values
+      if (areValuesEqual(currentValue, parsedNewValue, variable.resolvedType)) {
+        unchangedCount++;
+      } else {
         updatedVariablesList.push({
           name,
-          current: formatValue(currentValue, existingVariable.resolvedType),
-          updated: formatValue(parsedImportedValue, existingVariable.resolvedType),
-          variable: existingVariable,
-          newValue: parsedImportedValue,
-          type: existingVariable.resolvedType,
+          current: formatValue(currentValue, variable.resolvedType),
+          updated: formatValue(parsedNewValue, $type.toUpperCase()),
+          variable,
+          newValue: parsedNewValue,
+          type: variable.resolvedType,
+          collectionId // Include collectionId for updates
         });
-      } else {
-        unchangedCount++;
       }
     } else {
+      // New variable
       newVariablesList.push({
         name,
-        value: importedData.$value,
-        type: importedData.$type,
+        value: $value,
+        type: $type,
         description: importedData.$description || "",
       });
     }
   }
 
-  // Send data back to UI
   figma.ui.postMessage({
     type: "UPDATE_DATA_PROCESSED",
     newVariables: newVariablesList,
@@ -465,10 +477,9 @@ async function processUpdateData(jsonData) {
   });
 }
 
-// Function to parse imported value based on type
+// Parse imported value based on type
 function parseImportedValue(value, type) {
   if (isAlias(value)) {
-    // Handle aliases if needed
     return value;
   } else {
     switch (type) {
@@ -478,13 +489,16 @@ function parseImportedValue(value, type) {
         return parseFloat(value);
       case "string":
         return value;
+      case "boolean":
+        // If boolean $value is missing, default to true for now
+        return typeof value === "boolean" ? value : true;
       default:
         return value;
     }
   }
 }
 
-// Function to check if two values are equal
+// Check if two values are equal
 function areValuesEqual(value1, value2, type) {
   if (type === "COLOR") {
     return (
@@ -498,41 +512,65 @@ function areValuesEqual(value1, value2, type) {
   }
 }
 
-// Function to format value for display
+// Format value for display
 function formatValue(value, type) {
   if (value && value.type === "VARIABLE_ALIAS") {
     return `{Alias}`;
   } else if (type === "COLOR") {
     return rgbToHex(value);
   } else {
-    return value.toString();
+    return (value && value.toString()) || "Undefined";
   }
 }
 
-// Function to update a single variable by name
-async function updateVariableByName(name) {
-  const updatedVar = updatedVariablesList.find((v) => v.name === name);
+// Update a single variable by ID
+async function updateVariableById(id) {
+  const updatedVar = updatedVariablesList.find((v) => v.variable.id === id);
+
   if (updatedVar) {
-    const variable = updatedVar.variable;
-    const newValue = updatedVar.newValue;
+    const { variable, newValue, collectionId } = updatedVar;
 
-    variable.setValueForMode(variable.collection.defaultModeId, newValue);
-    figma.notify(`Variable "${name}" updated.`);
+    try {
+      const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      if (!collection || !collection.defaultModeId) {
+        console.error(`Collection or defaultModeId is undefined for variable "${variable.name}".`);
+        figma.notify(`Failed to update variable "${variable.name}".`);
+        return;
+      }
+
+      variable.setValueForMode(collection.defaultModeId, newValue);
+      figma.notify(`Variable "${variable.name}" updated successfully.`);
+    } catch (error) {
+      console.error(`Failed to update variable "${variable.name}":`, error);
+      figma.notify(`Failed to update variable "${variable.name}".`);
+    }
+  } else {
+    figma.notify(`Variable with ID "${id}" not found in updated list.`);
   }
 }
 
-// Function to update all variables
+// Update all variables
 async function updateAllVariables() {
-  for (const updatedVar of updatedVariablesList) {
-    const variable = updatedVar.variable;
-    const newValue = updatedVar.newValue;
+  try {
+    for (const updatedVar of updatedVariablesList) {
+      const { variable, newValue, collectionId } = updatedVar;
 
-    variable.setValueForMode(variable.collection.defaultModeId, newValue);
+      const collection = await figma.variables.getVariableCollectionByIdAsync(collectionId);
+      if (!collection || !collection.defaultModeId) {
+        console.error(`Collection or defaultModeId is undefined for variable "${variable.name}".`);
+        continue;
+      }
+
+      variable.setValueForMode(collection.defaultModeId, newValue);
+    }
+    figma.notify("All variables updated successfully.");
+  } catch (error) {
+    console.error("Failed to update all variables:", error);
+    figma.notify("Failed to update all variables.");
   }
-  figma.notify("All variables updated successfully.");
 }
 
-// Function to add all new variables
+// Add all new variables
 async function addAllNewVariables() {
   const { collection, modeId } = getDefaultCollectionAndMode();
 
@@ -551,7 +589,7 @@ async function addAllNewVariables() {
   figma.notify("All new variables added successfully.");
 }
 
-// Function to get default collection and mode
+// Get default collection and mode
 function getDefaultCollectionAndMode() {
   let collection;
   let modeId;
