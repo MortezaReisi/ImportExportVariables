@@ -203,7 +203,7 @@ async function processCollection({ name, modes, variableIds }) {
     const file = { fileName: `${name}.${mode.name}.tokens.json`, body: {} };
     for (const variableId of variableIds) {
       const variable = await figma.variables.getVariableByIdAsync(variableId);
-      const { name: varName, resolvedType, valuesByMode, description } = variable;
+      const { name: varName, resolvedType, valuesByMode, description, id } = variable;
       const value = valuesByMode[mode.modeId];
 
       if (value !== undefined) {
@@ -225,6 +225,7 @@ async function processCollection({ name, modes, variableIds }) {
         obj = obj[key];
         obj.$type = resolvedType === "FLOAT" ? "number" : resolvedType.toLowerCase();
         obj.$description = description || "";
+        obj.$id = id; // Add the unique ID here
 
         if (value.type === "VARIABLE_ALIAS") {
           const aliasVar = await figma.variables.getVariableByIdAsync(value.id);
