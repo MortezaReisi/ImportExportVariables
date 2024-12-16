@@ -38,48 +38,60 @@ function createVariable(collection, modeId, key, valueKey, tokens, description =
 
 // Function to import tokens from a JSON file
 function importJSONFile({ fileName, body }) {
-  const json = JSON.parse(body);
-  const { collection, modeId } = createCollection(fileName);
-  const aliases = {};
-  const tokens = {};
-  Object.entries(json).forEach(([key, object]) => {
-    traverseToken({
-      collection,
-      modeId,
-      key,
-      object,
-      tokens,
-      aliases,
+  const errors = []; // Local error collection for this import
+
+  try {
+    const json = JSON.parse(body);
+    const { collection, modeId } = createCollection(fileName);
+    const aliases = {};
+    const tokens = {};
+
+    // Traverse and process each token
+    Object.entries(json).forEach(([key, object]) => {
+      try {
+        traverseToken({ collection, modeId, key, object, tokens, aliases, errors });
+      } catch (error) {
+        // Catch unexpected errors and log them
+        console.error(`Unexpected error processing token "${key}":`, error.message);
+        errors.push({ key, message: error.message });
+      }
     });
-  });
-  processAliases({ collection, modeId, aliases, tokens });
+
+    // Process aliases after all tokens are processed
+    processAliases({ collection, modeId, aliases, tokens, errors });
+
+    // Summarize results
+    summarizeImportResults(errors);
+
+  } catch (error) {
+    console.error("Critical error during JSON parsing or import:", error.message);
+    figma.notify(`Import failed: ${error.message}`);
+  }
 }
 
 // Function to process and resolve aliases
-function processAliases({ collection, modeId, aliases, tokens }) {
-  aliases = Object.values(aliases);
-  let generations = aliases.length;
-  while (aliases.length && generations > 0) {
-    for (let i = aliases.length - 1; i >= 0; i--) {
-      const { key, valueKey, description } = aliases[i];
+function processAliases({ collection, modeId, aliases, tokens, errors }) {
+  const aliasList = Object.values(aliases);
+  let generations = aliasList.length;
+
+  while (aliasList.length && generations > 0) {
+    for (let i = aliasList.length - 1; i >= 0; i--) {
+      const { key, valueKey, description } = aliasList[i];
       const token = tokens[valueKey];
       if (token) {
-        aliases.splice(i, 1);
-        tokens[key] = createVariable(
-          collection,
-          modeId,
-          key,
-          valueKey,
-          tokens,
-          description
-        );
+        aliasList.splice(i, 1);
+        tokens[key] = createVariable(collection, modeId, key, valueKey, tokens, description);
       }
     }
     generations--;
   }
 
-  if (aliases.length > 0) {
-    console.warn("Some aliases could not be resolved due to missing tokens:", aliases);
+  if (aliasList.length > 0) {
+    aliasList.forEach((alias) => {
+      const msg = `Alias could not be resolved due to missing token: ${alias.valueKey}`;
+      errors.push({ key: alias.key, message: msg });
+      console.warn(`Error for token "${alias.key}": ${msg}`);
+    });
   }
 }
 
@@ -96,6 +108,7 @@ function traverseToken({
   object,
   tokens,
   aliases,
+  errors,
   parentType,
 }) {
   if (key.charAt(0) === "$") {
@@ -107,65 +120,53 @@ function traverseToken({
   if (object.$value !== undefined) {
     const description = object.$description || "";
     if (!type) {
-      console.warn(`Type is missing for token: ${key}. Skipping this token.`);
-      return;
+      const msg = `Type is missing for token: ${key}. Skipping this token.`;
+      console.warn(msg);
+      errors.push({ key, message: msg });
+      return; // Skip this token, continue processing others
     }
 
     if (isAlias(object.$value)) {
-      const valueKey = object.$value
-        .trim()
-        .replace(/\./g, "/")
-        .replace(/[\{\}]/g, "");
+      const valueKey = object.$value.trim().replace(/\./g, "/").replace(/[\{\}]/g, "");
       if (tokens[valueKey]) {
-        tokens[key] = createVariable(
-          collection,
-          modeId,
-          key,
-          valueKey,
-          tokens,
-          description
-        );
+        tokens[key] = createVariable(collection, modeId, key, valueKey, tokens, description);
       } else {
-        aliases[key] = {
-          key,
-          valueKey,
-          description,
-        };
+        aliases[key] = { key, valueKey, description };
       }
     } else {
-      switch (type) {
-        case "color":
-          tokens[key] = createToken(
-            collection,
-            modeId,
-            "COLOR",
-            key,
-            parseColor(object.$value),
-            description
-          );
-          break;
-        case "number":
-          tokens[key] = createToken(
-            collection,
-            modeId,
-            "FLOAT",
-            key,
-            parseFloat(object.$value),
-            description
-          );
-          break;
-        case "string":
-          tokens[key] = createToken(
-            collection,
-            modeId,
-            "STRING",
-            key,
-            object.$value,
-            description
-          );
-          break;
-        default:
-          console.warn(`Unsupported type "${type}" for token "${key}". Skipping this token.`);
+      try {
+        switch (type) {
+          case "color":
+            tokens[key] = createToken(collection, modeId, "COLOR", key, parseColor(object.$value), description);
+            break;
+          case "number":
+            const numValue = parseFloat(object.$value);
+            if (isNaN(numValue)) {
+              const msg = `Invalid number value for token "${key}".`;
+              console.warn(msg);
+              errors.push({ key, message: msg });
+            } else {
+              tokens[key] = createToken(collection, modeId, "FLOAT", key, numValue, description);
+            }
+            break;
+          case "string":
+            if (typeof object.$value !== "string") {
+              const msg = `Invalid string value for token "${key}". Expected a string.`;
+              console.warn(msg);
+              errors.push({ key, message: msg });
+            } else {
+              tokens[key] = createToken(collection, modeId, "STRING", key, object.$value, description);
+            }
+            break;
+          default:
+            const msg = `Unsupported type "${type}" for token "${key}". Skipping this token.`;
+            console.warn(msg);
+            errors.push({ key, message: msg });
+        }
+      } catch (err) {
+        // Catch parsing errors (e.g., invalid color formats)
+        console.error(`Error creating token "${key}":`, err.message);
+        errors.push({ key, message: err.message });
       }
     }
   } else {
@@ -179,10 +180,25 @@ function traverseToken({
           object: object2,
           tokens,
           aliases,
+          errors,
           parentType: newParentType,
         });
       }
     });
+  }
+}
+
+// Function to summarize the results of an import
+function summarizeImportResults(errors) {
+  if (errors.length > 0) {
+    console.group("Import Errors");
+    errors.forEach(({ key, message }) => {
+      console.error(`Token: "${key}", Error: ${message}`);
+    });
+    console.groupEnd();
+    figma.notify(`Import completed with ${errors.length} errors. Check the console for details.`);
+  } else {
+    figma.notify("Import completed successfully.");
   }
 }
 
@@ -294,7 +310,6 @@ if (figma.command === "import") {
     height: 600,
     themeColors: true,
   });
-}
 
 // Convert RGB color values to hex string
 function rgbToHex({ r, g, b, a }) {
@@ -379,7 +394,6 @@ function hslToRgbFloat(h, s, l) {
   };
 
   let r, g, b;
-
   if (s === 0) {
     r = g = b = l; // Achromatic
   } else {
@@ -603,4 +617,5 @@ function getDefaultCollectionAndMode() {
   }
 
   return { collection, modeId };
+}
 }
