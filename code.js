@@ -5,6 +5,20 @@ console.clear();
 let newVariablesList = [];
 let updatedVariablesList = [];
 
+// Replace the String names Errors
+function sanitizeVariableName(variableName) {
+  return variableName
+      .trim() // Remove leading and trailing spaces
+      .replace(/\/\/+/g, "_undefined_") // Replace empty paths with 'undefined'
+      .replace(/[/$,.:]/g, "_") // Replace invalid symbols with '_'
+      .replace(/[,]/g, "") // Remove commas
+      .replace(/[(\[\])]/g, "") // Remove unsupported characters
+      .replace(/\s+/g, "_") // Replace spaces with '_'
+      .replace(/__+/g, "_") // Replace multiple underscores
+      .toLowerCase(); // Convert to lowercase
+}
+
+
 // Function to create a new variable collection
 function createCollection(name) {
   const collection = figma.variables.createVariableCollection(name);
@@ -14,27 +28,32 @@ function createCollection(name) {
 
 // Function to create a new token (variable)
 function createToken(collection, modeId, type, name, value, description = "") {
-  const token = figma.variables.createVariable(name, collection, type);
+  const sanitizedName = sanitizeVariableName(name); // Sanitize the name
+  const token = figma.variables.createVariable(sanitizedName, collection, type);
   token.setValueForMode(modeId, value);
   token.description = description;
   return token;
 }
 
+
 // Function to create an alias variable
 function createVariable(collection, modeId, key, valueKey, tokens, description = "") {
-  const token = tokens[valueKey];
+  const sanitizedKey = sanitizeVariableName(key); // Sanitize key
+  const sanitizedValueKey = sanitizeVariableName(valueKey); // Sanitize valueKey
+  const token = tokens[sanitizedValueKey];
   return createToken(
-    collection,
-    modeId,
-    token.resolvedType,
-    key,
-    {
-      type: "VARIABLE_ALIAS",
-      id: `${token.id}`,
-    },
-    description
+      collection,
+      modeId,
+      token.resolvedType,
+      sanitizedKey,
+      {
+          type: "VARIABLE_ALIAS",
+          id: `${token.id}`,
+      },
+      description
   );
 }
+
 
 // Function to import tokens from a JSON file
 function importJSONFile({ fileName, body }) {
@@ -111,82 +130,114 @@ function traverseToken({
   errors,
   parentType,
 }) {
-  if (key.charAt(0) === "$") {
-    return;
+  const sanitizedKey = sanitizeVariableName(key); // Sanitize the key
+
+  if (sanitizedKey.charAt(0) === "$") {
+      return;
   }
 
   const type = object.$type || parentType;
 
   if (object.$value !== undefined) {
-    const description = object.$description || "";
-    if (!type) {
-      const msg = `Type is missing for token: ${key}. Skipping this token.`;
-      console.warn(msg);
-      errors.push({ key, message: msg });
-      return; // Skip this token, continue processing others
-    }
+      const description = object.$description || "";
+      if (!type) {
+          const msg = `Type is missing for token: ${sanitizedKey}. Skipping this token.`;
+          console.warn(msg);
+          errors.push({ key: sanitizedKey, message: msg });
+          return; // Skip this token, continue processing others
+      }
 
-    if (isAlias(object.$value)) {
-      const valueKey = object.$value.trim().replace(/\./g, "/").replace(/[\{\}]/g, "");
-      if (tokens[valueKey]) {
-        tokens[key] = createVariable(collection, modeId, key, valueKey, tokens, description);
+      if (isAlias(object.$value)) {
+          const valueKey = sanitizeVariableName(
+              object.$value.trim().replace(/\./g, "/").replace(/[\{\}]/g, "")
+          );
+          if (tokens[valueKey]) {
+              tokens[sanitizedKey] = createVariable(
+                  collection,
+                  modeId,
+                  sanitizedKey,
+                  valueKey,
+                  tokens,
+                  description
+              );
+          } else {
+              aliases[sanitizedKey] = { key: sanitizedKey, valueKey, description };
+          }
       } else {
-        aliases[key] = { key, valueKey, description };
+          try {
+              switch (type) {
+                  case "color":
+                      tokens[sanitizedKey] = createToken(
+                          collection,
+                          modeId,
+                          "COLOR",
+                          sanitizedKey,
+                          parseColor(object.$value),
+                          description
+                      );
+                      break;
+                  case "number":
+                      const numValue = parseFloat(object.$value);
+                      if (isNaN(numValue)) {
+                          const msg = `Invalid number value for token "${sanitizedKey}".`;
+                          console.warn(msg);
+                          errors.push({ key: sanitizedKey, message: msg });
+                      } else {
+                          tokens[sanitizedKey] = createToken(
+                              collection,
+                              modeId,
+                              "FLOAT",
+                              sanitizedKey,
+                              numValue,
+                              description
+                          );
+                      }
+                      break;
+                  case "string":
+                      if (typeof object.$value !== "string") {
+                          const msg = `Invalid string value for token "${sanitizedKey}". Expected a string.`;
+                          console.warn(msg);
+                          errors.push({ key: sanitizedKey, message: msg });
+                      } else {
+                          tokens[sanitizedKey] = createToken(
+                              collection,
+                              modeId,
+                              "STRING",
+                              sanitizedKey,
+                              object.$value,
+                              description
+                          );
+                      }
+                      break;
+                  default:
+                      const msg = `Unsupported type "${type}" for token "${sanitizedKey}". Skipping this token.`;
+                      console.warn(msg);
+                      errors.push({ key: sanitizedKey, message: msg });
+              }
+          } catch (err) {
+              console.error(`Error creating token "${sanitizedKey}":`, err.message);
+              errors.push({ key: sanitizedKey, message: err.message });
+          }
       }
-    } else {
-      try {
-        switch (type) {
-          case "color":
-            tokens[key] = createToken(collection, modeId, "COLOR", key, parseColor(object.$value), description);
-            break;
-          case "number":
-            const numValue = parseFloat(object.$value);
-            if (isNaN(numValue)) {
-              const msg = `Invalid number value for token "${key}".`;
-              console.warn(msg);
-              errors.push({ key, message: msg });
-            } else {
-              tokens[key] = createToken(collection, modeId, "FLOAT", key, numValue, description);
-            }
-            break;
-          case "string":
-            if (typeof object.$value !== "string") {
-              const msg = `Invalid string value for token "${key}". Expected a string.`;
-              console.warn(msg);
-              errors.push({ key, message: msg });
-            } else {
-              tokens[key] = createToken(collection, modeId, "STRING", key, object.$value, description);
-            }
-            break;
-          default:
-            const msg = `Unsupported type "${type}" for token "${key}". Skipping this token.`;
-            console.warn(msg);
-            errors.push({ key, message: msg });
-        }
-      } catch (err) {
-        // Catch parsing errors (e.g., invalid color formats)
-        console.error(`Error creating token "${key}":`, err.message);
-        errors.push({ key, message: err.message });
-      }
-    }
   } else {
-    const newParentType = object.$type || parentType;
-    Object.entries(object).forEach(([key2, object2]) => {
-      if (key2.charAt(0) !== "$") {
-        traverseToken({
-          collection,
-          modeId,
-          key: `${key}/${key2}`,
-          object: object2,
-          tokens,
-          aliases,
-          errors,
-          parentType: newParentType,
-        });
-      }
-    });
+      const newParentType = object.$type || parentType;
+      Object.entries(object).forEach(([key2, object2]) => {
+          if (key2.charAt(0) !== "$") {
+              traverseToken({
+                  collection,
+                  modeId,
+                  key: `${sanitizedKey}/${key2}`,
+                  object: object2,
+                  tokens,
+                  aliases,
+                  errors,
+                  parentType: newParentType,
+              });
+          }
+      });
   }
 }
+
 
 // Function to summarize the results of an import
 function summarizeImportResults(errors) {
@@ -216,57 +267,58 @@ async function exportToJSON() {
 async function processCollection({ name, modes, variableIds }) {
   const files = [];
   for (const mode of modes) {
-    const file = { fileName: `${name}.${mode.name}.tokens.json`, body: {} };
-    for (const variableId of variableIds) {
-      const variable = await figma.variables.getVariableByIdAsync(variableId);
-      const { name: varName, resolvedType, valuesByMode, description, id } = variable;
-      const value = valuesByMode[mode.modeId];
+      const file = { fileName: `${sanitizeVariableName(name)}.${sanitizeVariableName(mode.name)}.tokens.json`, body: {} };
+      for (const variableId of variableIds) {
+          const variable = await figma.variables.getVariableByIdAsync(variableId);
+          const { name: varName, resolvedType, valuesByMode, description, id } = variable;
+          const value = valuesByMode[mode.modeId];
 
-      if (value !== undefined) {
-        let obj = file.body;
-        const path = varName.split("/");
-        const key = path.pop();
-        for (const groupName of path) {
-          if (groupName.charAt(0) === "$") continue;
-          if (!obj[groupName]) {
-            obj[groupName] = {};
+          if (value !== undefined) {
+              let obj = file.body;
+              const path = sanitizeVariableName(varName).split("/"); // Sanitize the variable name
+              const key = path.pop();
+              for (const groupName of path) {
+                  if (groupName.charAt(0) === "$") continue; // Skip meta properties
+                  if (!obj[groupName]) {
+                      obj[groupName] = {};
+                  }
+                  obj = obj[groupName];
+              }
+
+              if (!obj[key]) {
+                  obj[key] = {};
+              }
+
+              obj = obj[key];
+              obj.$type = resolvedType === "FLOAT" ? "number" : resolvedType.toLowerCase();
+              obj.$description = description || "";
+              obj.$id = id; // Add the unique ID here
+
+              if (value.type === "VARIABLE_ALIAS") {
+                  const aliasVar = await figma.variables.getVariableByIdAsync(value.id);
+                  obj.$value = `{${sanitizeVariableName(aliasVar.name).replace(/\//g, ".")}}`;
+              } else {
+                  switch (resolvedType) {
+                      case "COLOR":
+                          obj.$value = rgbToHex(value);
+                          break;
+                      case "FLOAT":
+                          obj.$value = value;
+                          break;
+                      case "STRING":
+                          obj.$value = value;
+                          break;
+                      default:
+                          console.warn(`Unsupported type "${resolvedType}" for variable "${varName}".`);
+                  }
+              }
           }
-          obj = obj[groupName];
-        }
-
-        if (!obj[key]) {
-          obj[key] = {};
-        }
-
-        obj = obj[key];
-        obj.$type = resolvedType === "FLOAT" ? "number" : resolvedType.toLowerCase();
-        obj.$description = description || "";
-        obj.$id = id; // Add the unique ID here
-
-        if (value.type === "VARIABLE_ALIAS") {
-          const aliasVar = await figma.variables.getVariableByIdAsync(value.id);
-          obj.$value = `{${aliasVar.name.replace(/\//g, ".")}}`;
-        } else {
-          switch (resolvedType) {
-            case "COLOR":
-              obj.$value = rgbToHex(value);
-              break;
-            case "FLOAT":
-              obj.$value = value;
-              break;
-            case "STRING":
-              obj.$value = value;
-              break;
-            default:
-              console.warn(`Unsupported type "${resolvedType}" for variable "${varName}".`);
-          }
-        }
       }
-    }
-    files.push(file);
+      files.push(file);
   }
   return files;
 }
+
 
 // Handler for messages from the plugin UI
 figma.ui.onmessage = async (msg) => {
