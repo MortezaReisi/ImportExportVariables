@@ -8,19 +8,17 @@ let newVariablesList = [];
 let updatedVariablesList = [];
 
 /**
- * Replaces or removes invalid characters and returns a sanitized, lowercase string.
+ * Sanitizes a variable name by replacing problematic characters
+ * only at the start or end of the string, while leaving internal characters intact.
  */
 function sanitizeVariableName(variableName) {
   return variableName
     .trim() // Remove leading/trailing spaces
-    .replace(/\/\/+/g, "_undefined_") // Replace empty paths with 'undefined'
-    .replace(/[/$,.:]/g, "_") // Replace invalid symbols with '_'
-    .replace(/[,]/g, "") // Remove commas
-    .replace(/[(\[\])]/g, "") // Remove unsupported characters
-    .replace(/\s+/g, "_") // Replace spaces with '_'
-    .replace(/__+/g, "_") // Replace multiple underscores
+    .replace(/^[^a-zA-Z0-9/]+/, "_") // Replace invalid characters at the start with '_'
+    .replace(/[^a-zA-Z0-9]+$/, "_") // Replace invalid characters at the end with '_'
     .toLowerCase(); // Convert to lowercase
 }
+
 
 /**
  * Convert RGBA to Hex or RGBA string.
