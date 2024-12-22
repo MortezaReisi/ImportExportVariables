@@ -397,7 +397,7 @@ function importJSONFile({ fileName, body }) {
 
 /**
  * Export tokens to JSON by processing each local collection
- * into separate JSON files, then posting results to the UI.
+ * into a single JSON file, then posting results to the UI.
  */
 async function exportToJSON() {
   try {
@@ -414,6 +414,7 @@ async function exportToJSON() {
     // Flatten the resulting arrays of files
     processedCollections.forEach((arr) => files.push(...arr));
 
+    // Post the result back to the plugin UI
     figma.ui.postMessage({ type: "EXPORT_RESULT", files });
   } catch (error) {
     console.error("Export failed:", error);
@@ -421,9 +422,10 @@ async function exportToJSON() {
   }
 }
 
+
 /**
  * Process a single variable collection, returning JSON data
- * suitable for saving/export.
+ * for all modes in one file.
  */
 async function processCollection({ name, modes = [], variableIds = [] }) {
   if (!modes.length || !variableIds.length) {
@@ -431,74 +433,91 @@ async function processCollection({ name, modes = [], variableIds = [] }) {
     return [];
   }
 
-  const files = [];
-  for (const mode of modes) {
-    const file = {
-      fileName: sanitizeVariableName(name) + "." + sanitizeVariableName(mode.name) + ".tokens.json",
-      body: {}
-    };
+  // We'll export a single file named `collectionName.tokens.json`
+  const file = {
+    // If your collection name is "smartpath_ds", this results in "smartpath_ds.tokens.json"
+    fileName: `${sanitizeVariableName(name)}.tokens.json`,
+    body: {}
+  };
 
-    for (const variableId of variableIds) {
-      const variable = await figma.variables.getVariableByIdAsync(variableId);
-      const { name: varName, resolvedType, valuesByMode, description, id } = variable;
-      const value = valuesByMode[mode.modeId];
+  // Iterate over every variable in this collection
+  for (const variableId of variableIds) {
+    const variable = await figma.variables.getVariableByIdAsync(variableId);
+    const { name: varName, resolvedType, valuesByMode, description, id } = variable;
 
-      if (value !== undefined) {
-        let obj = file.body;
-        const path = sanitizeVariableName(varName).split("/");
-        const key = path.pop();
+    // Build the nested object path based on varName
+    let obj = file.body;
+    const path = sanitizeVariableName(varName).split("/");
+    const finalKey = path.pop();
 
-        // Traverse nested objects in the JSON structure
-        for (const groupName of path) {
-          if (groupName.charAt(0) === "$") {
-            continue; // Skip meta properties
-          }
-          if (!obj[groupName]) {
-            obj[groupName] = {};
-          }
-          obj = obj[groupName];
-        }
+    // Traverse or create any needed sub-objects
+    for (const groupName of path) {
+      if (!obj[groupName]) {
+        obj[groupName] = {};
+      }
+      obj = obj[groupName];
+    }
 
-        if (!obj[key]) {
-          obj[key] = {};
-        }
+    // Create the final token object if not already created
+    if (!obj[finalKey]) {
+      obj[finalKey] = {};
+    }
 
-        obj = obj[key];
-        // Convert resolvedType to a design tokens type
-        obj.$type = (resolvedType === "FLOAT") ? "number" : resolvedType.toLowerCase();
-        obj.$description = description || "";
-        obj.$id = id; // Store the unique variable ID
+    const tokenObj = obj[finalKey];
 
-        // Check if it's an alias or direct value
-        if (value.type === "VARIABLE_ALIAS") {
-          const aliasVar = await figma.variables.getVariableByIdAsync(value.id);
-          obj.$value = "{" + sanitizeVariableName(aliasVar.name).replace(/\//g, ".") + "}";
-        } else {
-          switch (resolvedType) {
-            case "COLOR":
-              try {
-                obj.$value = rgbToHex(value);
-              } catch (e) {
-                console.warn(`Failed to convert color value to hex for variable "${varName}":`, e);
-                obj.$value = "#000000"; // Fallback
-              }
-              break;
-            case "FLOAT":
-              obj.$value = value;
-              break;
-            case "STRING":
-              obj.$value = value;
-              break;
-            default:
-              console.warn(`Unsupported type "${resolvedType}" for variable "${varName}".`);
-          }
+    // Basic metadata (shared across all modes)
+    tokenObj.$id = id;
+    tokenObj.$type = resolvedType === "FLOAT" ? "number" : resolvedType.toLowerCase();
+    tokenObj.$description = description || "";
+
+    /**
+     * For each mode, we store its value in a subkey named after the mode,
+     * e.g. "mode_1", "mode_dark", etc.
+     */
+    for (const mode of modes) {
+      const modeValue = valuesByMode[mode.modeId];
+      if (modeValue === undefined) continue;
+
+      // Convert the mode name to a safe key, e.g. "mode_1"
+      const modeKey = sanitizeVariableName(mode.name);
+
+      // If not present, create a sub-object
+      if (!tokenObj[modeKey]) {
+        tokenObj[modeKey] = {};
+      }
+
+      if (modeValue.type === "VARIABLE_ALIAS") {
+        // If the value is an alias
+        const aliasVar = await figma.variables.getVariableByIdAsync(modeValue.id);
+        tokenObj[modeKey].$value = `{${sanitizeVariableName(aliasVar.name).replace(/\//g, ".")}}`;
+      } else {
+        // Direct (non-alias) values
+        switch (resolvedType) {
+          case "COLOR":
+            try {
+              tokenObj[modeKey].$value = rgbToHex(modeValue);
+            } catch (e) {
+              console.warn(`Failed to convert color value to hex for "${varName}":`, e);
+              tokenObj[modeKey].$value = "#000000";
+            }
+            break;
+          case "FLOAT":
+            tokenObj[modeKey].$value = modeValue;
+            break;
+          case "STRING":
+            tokenObj[modeKey].$value = modeValue;
+            break;
+          default:
+            console.warn(`Unsupported type "${resolvedType}" for variable "${varName}".`);
         }
       }
     }
-    files.push(file);
   }
-  return files;
+
+  // Return an array with just one file object
+  return [file];
 }
+
 
 /**
  * Flatten JSON objects to identify variables by path for easy comparison.
