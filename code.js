@@ -433,7 +433,6 @@ async function processCollection({ name, modes = [], variableIds = [] }) {
 
   // We'll export a single file named `collectionName.tokens.json`
   const file = {
-    // If your collection name is "smartpath_ds", this results in "smartpath_ds.tokens.json"
     fileName: `${sanitizeVariableName(name)}.tokens.json`,
     body: {}
   };
@@ -469,7 +468,6 @@ async function processCollection({ name, modes = [], variableIds = [] }) {
     tokenObj.$description = description || "";
 
     /**
-     * For each mode, we store its value in a subkey named after the mode,
      * e.g. "mode_1", "mode_dark", etc.
      */
     for (const mode of modes) {
