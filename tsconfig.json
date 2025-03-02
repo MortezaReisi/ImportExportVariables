@@ -1,11 +1,18 @@
 {
   "compilerOptions": {
     "target": "es6",
+    "module": "ESNext",
     "lib": ["es6"],
     "strict": true,
+    "importHelpers": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
     "typeRoots": [
       "./node_modules/@types",
       "./node_modules/@figma"
     ]
-  }
+  },
+  "include": ["src"]
 }
