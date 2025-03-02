@@ -1,85 +1,124 @@
-<style>
-  :root {
-    --spacing: 0.8rem;
-  }
-  * {
-    box-sizing: border-box;
-  }
-  body {
-    background-color: var(--figma-color-bg);
-    color: var(--figma-color-text);
-    margin: 0;
-    padding: var(--spacing);
-  }
-  html, body {
-    height: 100%;
-  }
-  form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing);
-    height: 100%;
-  }
-  button {
-    appearance: none;
-    border-radius: 4px;
-    padding: var(--spacing);
-    background-color: var(--figma-color-bg-brand);
-    border: none;
-    color: var(--figma-color-text-onbrand);
-    font-family: system-ui, sans-serif;
-    font-weight: bold;
-  }
-  input, textarea {
-    font-family: Andale Mono, monospace;
-    font-size: 0.9rem;
-    padding: var(--spacing);
-    background-color: var(--figma-color-bg-secondary);
-    color: var(--figma-color-text-secondary);
-    border: 2px solid var(--figma-color-border);
-  }
-  input:focus, textarea:focus {
-    border-color: var(--figma-color-border-selected);
-    outline: none;
-  }
-  textarea {
-    flex: 1;
-    white-space: pre;
-  }
-  form > * {
-    display: block;
-    width: 100%;
-  }
-</style>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Import Variables</title>
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        :root {
+            --primary-bg: #121212;
+            --secondary-bg: #1e1e1e;
+            --border-color: #3c3c3c;
+            --text-color: #ffffff;
+            --button-bg: #007acc;
+            --button-hover: #005f99;
+            --input-bg: #252526;
+            --input-text: #ffffff;
+        }
+        * {
+            box-sizing: border-box;
+            font-family: Arial, sans-serif;
+        }
+        body {
+            background-color: var(--primary-bg);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            width: 100%;
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        label {
+            margin-bottom: 6px;
+            font-size: 18px;
+            font-weight: bold;
+            color: var(--text-color);
+        }
+        input, textarea {
+            background-color: var(--input-bg);
+            color: var(--input-text);
+            border: 1px solid var(--border-color);
+            padding: 14px;
+            border-radius: 6px;
+            width: 100%;
+            font-size: 16px;
+        }
+        .json-container {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            position: relative;
+        }
+        .add-button {
+            background: var(--button-bg);
+            color: var(--text-color);
+            border: none;
+            padding: 16px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            transition: background 0.2s;
+        }
+        .add-button:hover {
+            background: var(--button-hover);
+        }
+        .add-button .material-icons {
+            font-size: 22px;
+            color: #ffffff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="input-group">
+            <label for="collectionName">Collection Name</label>
+            <input id="collectionName" type="text" placeholder="Enter Collection Name">
+        </div>
+        <div class="json-container">
+            <label for="jsonInput">Variables JSON</label>
+            <textarea id="jsonInput" rows="10" placeholder="Paste your JSON here..."></textarea>
+        </div>
+        <button class="add-button" onclick="importVariables()">
+            <span class="material-icons">add</span>
+            Add Variables
+        </button>
+    </div>
 
-<form>
-  <input id="collection-name" placeholder="Collection Name" required type="text" value="Wild Examples" />
-  <textarea id="json-input" required placeholder="Tokens JSON"></textarea>
-  <button type="submit">Import Variables</button>
-</form>
+    <script>
+        function importVariables() {
+            const collectionName = document.getElementById('collectionName').value.trim();
+            const jsonInput = document.getElementById('jsonInput').value.trim();
+            
+            if (!collectionName || !jsonInput) {
+                alert('Please enter collection name and valid JSON');
+                return;
+            }
 
-<script>
-  document.querySelector("form").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const collectionName = document.getElementById("collection-name").value.trim();
-    const jsonInput = document.getElementById("json-input").value.trim();
-    
-    if (!collectionName || !isValidJSON(jsonInput)) {
-      alert("Invalid collection name or JSON format.");
-      return;
-    }
-
-    const variables = JSON.parse(jsonInput);
-    console.log("[UI] Sending import message:", variables);
-    parent.postMessage({ pluginMessage: { type: "import", variables, collectionName } }, "*");
-  });
-
-  function isValidJSON(body) {
-    try {
-      JSON.parse(body);
-      return true;
-    } catch (e) {
-      return false;
-    }
-  }
-</script>
+            try {
+                const variables = JSON.parse(jsonInput);
+                parent.postMessage({ pluginMessage: { type: "import", variables, collectionName } }, "*");
+            } catch (error) {
+                alert('Invalid JSON format');
+                console.error(error);
+            }
+        }
+    </script>
+</body>
+</html>
